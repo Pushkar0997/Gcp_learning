@@ -102,18 +102,19 @@ def main(args):
     logger.info(f"Validation accuracy: {acc:.4f}")
 
     # Vertex AI expects the model in AIP_MODEL_DIR
-    model_dir = os.environ.get("AIP_MODEL_DIR", "/tmp/model")
+    model_dir = os.environ.get("AIP_MODEL_DIR")
+    if not model_dir:
+        raise RuntimeError("AIP_MODEL_DIR is not set; cannot save model to GCS.")
+
     os.makedirs(model_dir, exist_ok=True)
     model_path = os.path.join(model_dir, "model.joblib")
-
     logger.info(f"Saving model to {model_path}")
     joblib.dump(model, model_path)
 
-    # Also log metrics to a simple text file
     metrics_path = os.path.join(model_dir, "metrics.txt")
     with open(metrics_path, "w") as f:
         f.write(f"accuracy={acc:.4f}\n")
-
+    logger.info(f"Saved metrics to {metrics_path}")
     logger.info("Training job completed.")
 
 
