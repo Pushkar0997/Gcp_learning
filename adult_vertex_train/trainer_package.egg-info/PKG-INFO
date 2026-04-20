@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: trainer_package
+Version: 0.1
+Requires-Dist: pandas
+Requires-Dist: scikit-learn
+Requires-Dist: joblib
+Requires-Dist: gcsfs
+Dynamic: requires-dist
