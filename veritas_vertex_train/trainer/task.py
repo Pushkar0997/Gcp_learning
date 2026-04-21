@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import torch
-from datasets import Dataset, DatasetDict, load_dataset, concatenate_datasets
+from datasets import Dataset, DatasetDict, load_dataset, concatenate_datasets, Features, Value
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -13,12 +13,12 @@ from transformers import (
 from evaluate import load as load_metric
 
 # ── Config ─────────────────────────────────────────────────────────────────
-MODEL_CHECKPOINT = "allenai/longformer-large-4096"
+MODEL_CHECKPOINT = "allenai/longformer-base-4096"
 GCS_BUCKET       = os.environ.get("GCS_BUCKET", "gs://veritas-ai-bucket1").rstrip("/")
 OUTPUT_DIR       = os.environ.get("AIP_MODEL_DIR", "./veritas_checkpoints")
 MAX_LENGTH       = 4096
 BATCH_SIZE       = 1
-GRAD_ACCUM       = 16
+GRAD_ACCUM       = 8
 EPOCHS           = 5
 LR               = 1e-5
 WARMUP_RATIO     = 0.06
@@ -78,7 +78,24 @@ print(f"FEVER: {len(fever_mapped)} examples")
 
 # ── Part 4: Combine all datasets ───────────────────────────────────────────
 print("Combining all datasets...")
-isot_hf  = Dataset.from_pandas(df_isot.reset_index(drop=True))
+
+common_features = Features({
+    "fulltext": Value("string"),
+    "label": Value("int64"),
+})
+
+isot_hf = Dataset.from_pandas(df_isot.reset_index(drop=True), features=common_features)
+
+liar_mapped = liar_mapped.map(
+    lambda x: {"fulltext": str(x["fulltext"]), "label": int(x["label"])}
+)
+liar_mapped = liar_mapped.cast(common_features)
+
+fever_mapped = fever_mapped.map(
+    lambda x: {"fulltext": str(x["fulltext"]), "label": int(x["label"])}
+)
+fever_mapped = fever_mapped.cast(common_features)
+
 combined = concatenate_datasets([isot_hf, liar_mapped, fever_mapped])
 combined = combined.shuffle(seed=42)
 print(f"Total combined: {len(combined)} examples")
