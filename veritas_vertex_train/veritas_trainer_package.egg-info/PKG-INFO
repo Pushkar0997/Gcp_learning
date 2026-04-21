@@ -3,14 +3,11 @@ Name: veritas_trainer_package
 Version: 0.1
 Requires-Dist: pandas
 Requires-Dist: numpy
-Requires-Dist: scikit-learn
-Requires-Dist: joblib
 Requires-Dist: gcsfs
 Requires-Dist: fsspec
 Requires-Dist: evaluate
 Requires-Dist: transformers==4.38.1
 Requires-Dist: datasets==2.18.0
 Requires-Dist: accelerate==0.28.0
-Requires-Dist: peft==0.9.0
 Requires-Dist: torch
 Dynamic: requires-dist

@@ -1,3 +1,4 @@
+pyproject.toml
 setup.py
 trainer/__init__.py
 trainer/task.py
