@@ -1,4 +1,7 @@
 import os
+os.environ["NCCL_P2P_DISABLE"] = "1"
+os.environ["NCCL_IB_DISABLE"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import pandas as pd
 import numpy as np
 import torch
