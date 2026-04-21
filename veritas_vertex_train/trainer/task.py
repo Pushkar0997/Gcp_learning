@@ -16,7 +16,7 @@ from evaluate import load as load_metric
 MODEL_CHECKPOINT = "allenai/longformer-base-4096"
 GCS_BUCKET       = os.environ.get("GCS_BUCKET", "gs://veritas-ai-bucket1").rstrip("/")
 OUTPUT_DIR       = os.environ.get("AIP_MODEL_DIR", "./veritas_checkpoints")
-MAX_LENGTH       = 4096
+MAX_LENGTH       = 1024
 BATCH_SIZE       = 1
 GRAD_ACCUM       = 8
 EPOCHS           = 5

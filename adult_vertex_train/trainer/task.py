@@ -2,6 +2,7 @@ import os
 import argparse
 import logging
 
+import gcsfs
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -69,7 +70,6 @@ def main(args):
     # For Vertex AI custom training, training data will be in a GCS path
     # but the container sees it as a local path if we use the gsutil download
     # step or mount GCS. For simplicity, we'll read directly via pandas+gcsfs
-    import gcsfs
 
     logger.info("Starting training job")
 
@@ -101,20 +101,22 @@ def main(args):
     acc = accuracy_score(y_val, y_pred)
     logger.info(f"Validation accuracy: {acc:.4f}")
 
-    # Vertex AI expects the model in AIP_MODEL_DIR
     model_dir = os.environ.get("AIP_MODEL_DIR")
     if not model_dir:
         raise RuntimeError("AIP_MODEL_DIR is not set; cannot save model to GCS.")
 
-    os.makedirs(model_dir, exist_ok=True)
-    model_path = os.path.join(model_dir, "model.joblib")
-    logger.info(f"Saving model to {model_path}")
-    joblib.dump(model, model_path)
+    fs = gcsfs.GCSFileSystem()
 
-    metrics_path = os.path.join(model_dir, "metrics.txt")
-    with open(metrics_path, "w") as f:
+    model_path = f"{model_dir.rstrip('/')}/model.joblib"
+    metrics_path = f"{model_dir.rstrip('/')}/metrics.txt"
+
+    logger.info(f"Saving model to {model_path}")
+    with fs.open(model_path, "wb") as f:
+        joblib.dump(model, f)
+
+    logger.info(f"Saving metrics to {metrics_path}")
+    with fs.open(metrics_path, "w") as f:
         f.write(f"accuracy={acc:.4f}\n")
-    logger.info(f"Saved metrics to {metrics_path}")
     logger.info("Training job completed.")
 
 
