@@ -1,0 +1,8 @@
+setup.py
+trainer/__init__.py
+trainer/task.py
+veritas_trainer_package.egg-info/PKG-INFO
+veritas_trainer_package.egg-info/SOURCES.txt
+veritas_trainer_package.egg-info/dependency_links.txt
+veritas_trainer_package.egg-info/requires.txt
+veritas_trainer_package.egg-info/top_level.txt
