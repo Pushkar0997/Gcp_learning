@@ -2,9 +2,11 @@ import os
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "0"
 import pandas as pd
 import numpy as np
 import torch
+import datasets as hf_datasets
 from datasets import Dataset, DatasetDict, load_dataset, concatenate_datasets, Features, Value
 from transformers import (
     AutoTokenizer,
@@ -14,6 +16,8 @@ from transformers import (
     EarlyStoppingCallback,
 )
 from evaluate import load as load_metric
+
+hf_datasets.config.IN_MEMORY_MAX_SIZE = 0
 
 # ── Config ─────────────────────────────────────────────────────────────────
 MODEL_CHECKPOINT = "allenai/longformer-base-4096"
@@ -42,7 +46,7 @@ print(f"ISOT: {len(df_isot)} examples")
 
 # ── Part 2: Load LIAR ──────────────────────────────────────────────────────
 print("Loading LIAR dataset...")
-liar = load_dataset("liar")
+liar = load_dataset("liar", trust_remote_code=True)
 
 def liar_to_binary(example):
     fake_labels = ["false", "barely-true", "pants-fire"]
@@ -60,7 +64,7 @@ print(f"LIAR: {len(liar_mapped)} examples")
 
 # ── Part 3: Load FEVER ─────────────────────────────────────────────────────
 print("Loading FEVER dataset...")
-fever = load_dataset("fever", "v1.0")
+fever = load_dataset("fever", "v1.0", trust_remote_code=True)
 
 def fever_to_binary(example):
     label_str = example.get("label", "")
@@ -104,12 +108,14 @@ combined = combined.shuffle(seed=42)
 print(f"Total combined: {len(combined)} examples")
 
 split    = combined.train_test_split(test_size=0.1, seed=42)
-datasets = DatasetDict({"train": split["train"], "test": split["test"]})
-print(datasets)
+datasets_obj = DatasetDict({"train": split["train"], "test": split["test"]})
+print(datasets_obj)
 
 # ── Part 5: Tokenize ───────────────────────────────────────────────────────
 print("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_CHECKPOINT)
+CACHE_DIR = "/tmp/hf_cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 def tokenize_function(examples):
     inputs = tokenizer(
@@ -127,7 +133,16 @@ def tokenize_function(examples):
     return inputs
 
 print("Tokenizing...")
-tokenized = datasets.map(tokenize_function, batched=True, batch_size=32)
+tokenized = datasets_obj.map(
+    tokenize_function,
+    batched=True,
+    batch_size=32,
+    cache_file_names={
+        "train": f"{CACHE_DIR}/tokenized_train.arrow",
+        "test": f"{CACHE_DIR}/tokenized_test.arrow",
+    },
+    num_proc=4,
+)
 tokenized = tokenized.remove_columns(["fulltext"])
 tokenized.set_format("torch")
 
