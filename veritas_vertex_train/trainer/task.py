@@ -141,7 +141,7 @@ tokenized = datasets_obj.map(
         "train": f"{CACHE_DIR}/tokenized_train.arrow",
         "test": f"{CACHE_DIR}/tokenized_test.arrow",
     },
-    num_proc=4,
+    num_proc=1,
 )
 tokenized = tokenized.remove_columns(["fulltext"])
 tokenized.set_format("torch")
