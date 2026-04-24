@@ -1,6 +1,7 @@
 pyproject.toml
 setup.py
 trainer/__init__.py
+trainer/accelerate_config.yaml
 trainer/task.py
 veritas_trainer_package.egg-info/PKG-INFO
 veritas_trainer_package.egg-info/SOURCES.txt
