@@ -49,8 +49,8 @@ MODEL_CHECKPOINT = "allenai/longformer-base-4096"
 GCS_BUCKET       = os.environ.get("GCS_BUCKET", "gs://veritas-ai-bucket2")
 OUTPUT_DIR       = os.environ.get("AIP_MODEL_DIR", "./veritas_checkpoints")
 MAX_LENGTH       = 1024
-BATCH_SIZE       = 4      # per GPU
-GRAD_ACCUM       = 2      # effective batch = 4 x 2 GPUs x 2 = 16
+BATCH_SIZE       = 8      # per GPU
+GRAD_ACCUM       = 2      # effective batch = 8 x 2 GPUs x 2 = 32
 EPOCHS           = 3
 LR               = 2e-5
 WARMUP_RATIO     = 0.06
@@ -221,7 +221,7 @@ training_args = TrainingArguments(
     weight_decay                = WEIGHT_DECAY,
     warmup_ratio                = WARMUP_RATIO,
     fp16                        = True,
-    gradient_checkpointing      = True,
+    gradient_checkpointing      = False,
     load_best_model_at_end      = True,
     metric_for_best_model       = "f1",
     lr_scheduler_type           = "cosine",
