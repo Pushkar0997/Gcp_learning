@@ -4,7 +4,17 @@ import os
 
 # ── Self-relaunch with accelerate for proper 2-GPU training ───────────────
 if os.environ.get("ACCELERATE_LAUNCHED") != "1":
-    os.environ["ACCELERATE_LAUNCHED"] = "1"
+    # Capture AIP_MODEL_DIR before relaunch so child process inherits it
+    aip_dir = os.environ.get("AIP_MODEL_DIR", "")
+    env = os.environ.copy()
+    env["ACCELERATE_LAUNCHED"] = "1"
+    env["AIP_MODEL_DIR"] = aip_dir
+    env["PYTHONUNBUFFERED"] = "1"
+    env["NCCL_P2P_DISABLE"] = "1"
+    env["NCCL_IB_DISABLE"] = "1"
+    env["TOKENIZERS_PARALLELISM"] = "false"
+    env["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "0"
+
     config_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "accelerate_config.yaml"
@@ -13,17 +23,16 @@ if os.environ.get("ACCELERATE_LAUNCHED") != "1":
         sys.executable, "-m", "accelerate.commands.launch",
         "--config_file", config_path,
         os.path.abspath(__file__),
-    ], check=True)
+    ], env=env, check=True)
     sys.exit(result.returncode)
 
-# ── Environment fixes — must be before any other imports ──────────────────
+# ── Environment fixes ──────────────────────────────────────────────────────
 os.environ["PYTHONUNBUFFERED"]               = "1"
 os.environ["NCCL_P2P_DISABLE"]               = "1"
 os.environ["NCCL_IB_DISABLE"]               = "1"
 os.environ["TOKENIZERS_PARALLELISM"]         = "false"
 os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = "0"
 
-import sys
 sys.stdout.reconfigure(line_buffering=True)
 
 import pandas as pd
@@ -44,13 +53,19 @@ from transformers import (
 )
 from evaluate import load as load_metric
 
-# ── Config ────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────
 MODEL_CHECKPOINT = "allenai/longformer-base-4096"
 GCS_BUCKET       = os.environ.get("GCS_BUCKET", "gs://veritas-ai-bucket2")
-OUTPUT_DIR       = os.environ.get("AIP_MODEL_DIR", "./veritas_checkpoints")
+
+# Output directory logic — explicit and guaranteed
+AIP_MODEL_DIR    = os.environ.get("AIP_MODEL_DIR", "")
+LOCAL_OUTPUT     = "/tmp/veritas_checkpoints"
+GCS_OUTPUT       = "gs://veritas-ai-bucket2/models/veritas-final-model"
+OUTPUT_DIR       = LOCAL_OUTPUT   # always train to local, upload explicitly at end
+
 MAX_LENGTH       = 1024
-BATCH_SIZE       = 8      # per GPU
-GRAD_ACCUM       = 2      # effective batch = 8 x 2 GPUs x 2 = 32
+BATCH_SIZE       = 8
+GRAD_ACCUM       = 2
 EPOCHS           = 3
 LR               = 2e-5
 WARMUP_RATIO     = 0.06
@@ -60,7 +75,7 @@ CACHE_DIR        = "/tmp/hf_cache"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# ── Startup info ──────────────────────────────────────────────────────────
+# ── Startup diagnostics ────────────────────────────────────────────────────
 print("=" * 60, flush=True)
 print("Veritas AI — Training Start", flush=True)
 print(f"GPUs available    : {torch.cuda.device_count()}", flush=True)
@@ -68,10 +83,13 @@ print(f"Model             : {MODEL_CHECKPOINT}", flush=True)
 print(f"Max length        : {MAX_LENGTH}", flush=True)
 print(f"Batch per GPU     : {BATCH_SIZE}", flush=True)
 print(f"Grad accumulation : {GRAD_ACCUM}", flush=True)
-print(f"Output dir        : {OUTPUT_DIR}", flush=True)
+print(f"Effective batch   : {BATCH_SIZE * GRAD_ACCUM * max(torch.cuda.device_count(), 1)}", flush=True)
+print(f"AIP_MODEL_DIR     : '{AIP_MODEL_DIR}'", flush=True)
+print(f"LOCAL_OUTPUT      : {LOCAL_OUTPUT}", flush=True)
+print(f"GCS_OUTPUT        : {GCS_OUTPUT}", flush=True)
 print("=" * 60, flush=True)
 
-# ── Part 1: ISOT ──────────────────────────────────────────────────────────
+# ── Part 1: ISOT ───────────────────────────────────────────────────────────
 print("\n[1/5] Loading ISOT...", flush=True)
 df_true = pd.read_csv(f"{GCS_BUCKET}/data/isot dataset/True.csv")
 df_fake = pd.read_csv(f"{GCS_BUCKET}/data/isot dataset/Fake.csv")
@@ -82,14 +100,14 @@ df["fulltext"] = df["title"].fillna("") + " " + df["text"].fillna("")
 df_isot = df[["fulltext", "label"]].dropna()
 print(f"    ISOT: {len(df_isot):,} examples", flush=True)
 
-# ── Part 2: LIAR ──────────────────────────────────────────────────────────
+# ── Part 2: LIAR ───────────────────────────────────────────────────────────
 print("\n[2/5] Loading LIAR...", flush=True)
 liar = load_dataset("liar", trust_remote_code=True, cache_dir=CACHE_DIR)
 
 def liar_to_binary(example):
     fake_labels = ["false", "barely-true", "pants-fire"]
     label_map   = {
-        0: "false",      1: "half-true",
+        0: "false",       1: "half-true",
         2: "mostly-true", 3: "true",
         4: "barely-true", 5: "pants-fire"
     }
@@ -103,7 +121,7 @@ liar_mapped = liar["train"].map(
 )
 print(f"    LIAR: {len(liar_mapped):,} examples", flush=True)
 
-# ── Part 3: FEVER ─────────────────────────────────────────────────────────
+# ── Part 3: FEVER ──────────────────────────────────────────────────────────
 print("\n[3/5] Loading FEVER...", flush=True)
 fever = load_dataset("fever", "v1.0", trust_remote_code=True, cache_dir=CACHE_DIR)
 
@@ -122,7 +140,7 @@ fever_mapped = fever["train"].map(
 fever_mapped = fever_mapped.filter(lambda x: x["label"] != -1)
 print(f"    FEVER: {len(fever_mapped):,} examples", flush=True)
 
-# ── Part 4: Combine ───────────────────────────────────────────────────────
+# ── Part 4: Combine ────────────────────────────────────────────────────────
 print("\n[4/5] Combining datasets...", flush=True)
 
 common_features = Features({
@@ -148,14 +166,14 @@ combined = concatenate_datasets([isot_hf, liar_mapped, fever_mapped])
 combined = combined.shuffle(seed=42)
 print(f"    Total: {len(combined):,} examples", flush=True)
 
-split    = combined.train_test_split(test_size=0.1, seed=42)
+split = combined.train_test_split(test_size=0.1, seed=42)
 datasets = DatasetDict({
     "train": split["train"],
     "test":  split["test"],
 })
 print(f"    Train: {len(datasets['train']):,} | Test: {len(datasets['test']):,}", flush=True)
 
-# ── Part 5: Tokenize ──────────────────────────────────────────────────────
+# ── Part 5: Tokenize ───────────────────────────────────────────────────────
 print("\n[5/5] Tokenizing...", flush=True)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_CHECKPOINT)
 
@@ -187,7 +205,7 @@ tokenized = tokenized.remove_columns(["fulltext"])
 tokenized.set_format("torch")
 print("    Tokenization complete.", flush=True)
 
-# ── Model ─────────────────────────────────────────────────────────────────
+# ── Model ──────────────────────────────────────────────────────────────────
 print("\nLoading model...", flush=True)
 model = AutoModelForSequenceClassification.from_pretrained(
     MODEL_CHECKPOINT,
@@ -195,7 +213,7 @@ model = AutoModelForSequenceClassification.from_pretrained(
 )
 print(f"    Parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
 
-# ── Metrics ───────────────────────────────────────────────────────────────
+# ── Metrics ────────────────────────────────────────────────────────────────
 accuracy_metric = load_metric("accuracy")
 f1_metric       = load_metric("f1")
 
@@ -208,7 +226,7 @@ def compute_metrics(eval_pred):
     )
     return {**acc, **f1}
 
-# ── Training args ─────────────────────────────────────────────────────────
+# ── Training args ──────────────────────────────────────────────────────────
 training_args = TrainingArguments(
     output_dir                  = OUTPUT_DIR,
     evaluation_strategy         = "epoch",
@@ -237,7 +255,7 @@ training_args = TrainingArguments(
     ddp_find_unused_parameters  = False,
 )
 
-# ── Trainer ───────────────────────────────────────────────────────────────
+# ── Trainer ────────────────────────────────────────────────────────────────
 print(f"\nStarting training on {torch.cuda.device_count()} GPU(s)...", flush=True)
 
 trainer = Trainer(
@@ -252,11 +270,50 @@ trainer = Trainer(
 
 trainer.train()
 
-# ── Save ──────────────────────────────────────────────────────────────────
-print("\nSaving model...", flush=True)
-trainer.save_model(OUTPUT_DIR)
-tokenizer.save_pretrained(OUTPUT_DIR)
-print(f"Model saved to {OUTPUT_DIR}", flush=True)
+# ── Save — local first, then explicit GCS upload ───────────────────────────
+print("\n" + "=" * 60, flush=True)
+print("Saving model locally...", flush=True)
+trainer.save_model(LOCAL_OUTPUT)
+tokenizer.save_pretrained(LOCAL_OUTPUT)
+print(f"Local save complete: {LOCAL_OUTPUT}", flush=True)
+
+# List what was saved locally
+local_files = subprocess.run(
+    ["ls", "-la", LOCAL_OUTPUT],
+    capture_output=True, text=True
+)
+print(f"Local files:\n{local_files.stdout}", flush=True)
+
+# Upload to GCS explicitly — does not depend on AIP_MODEL_DIR or gcsfuse
+print(f"\nUploading to GCS: {GCS_OUTPUT}", flush=True)
+upload = subprocess.run([
+    "gsutil", "-m", "cp", "-r",
+    LOCAL_OUTPUT + "/.",
+    GCS_OUTPUT + "/"
+], capture_output=True, text=True)
+
+print(upload.stdout, flush=True)
+
+if upload.returncode == 0:
+    print(f"GCS upload successful: {GCS_OUTPUT}", flush=True)
+else:
+    print(f"GCS upload error: {upload.stderr}", flush=True)
+    # Fallback: try writing to AIP_MODEL_DIR directly if it is set
+    if AIP_MODEL_DIR:
+        print(f"Trying AIP_MODEL_DIR fallback: {AIP_MODEL_DIR}", flush=True)
+        trainer.save_model(AIP_MODEL_DIR)
+        tokenizer.save_pretrained(AIP_MODEL_DIR)
+        print(f"Fallback save complete: {AIP_MODEL_DIR}", flush=True)
+    else:
+        print("AIP_MODEL_DIR not set — no fallback available.", flush=True)
+
+# Verify GCS upload
+print("\nVerifying GCS upload...", flush=True)
+verify = subprocess.run([
+    "gsutil", "ls", "-r", GCS_OUTPUT + "/"
+], capture_output=True, text=True)
+print(verify.stdout, flush=True)
+
 print("=" * 60, flush=True)
 print("Training complete.", flush=True)
 print("=" * 60, flush=True)
