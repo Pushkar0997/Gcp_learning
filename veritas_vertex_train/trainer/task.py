@@ -191,8 +191,8 @@ GCS_LIAR_VALID = f"{GCS_BUCKET}/data/liar_dataset/valid.tsv"
 
 # ── Training hyper-parameters ─────────────────────────────────────────────
 MAX_LENGTH   = 1024    # Longformer max is 4096; 1024 fits in T4 16GB with fp16
-BATCH_SIZE   = 8       # per GPU — reduce to 4 if OOM
-GRAD_ACCUM   = 2       # effective batch = 8 × 2 × 2 GPUs = 32
+BATCH_SIZE   = 16      # per GPU — increased from 8 (was underutilizing GPU)
+GRAD_ACCUM   = 1       # disable if batch 16 fits in memory (2 GPUs × 16 × 1 = 32 effective)
 EPOCHS       = 3
 LR           = 2e-5
 WARMUP_RATIO = 0.06
@@ -211,7 +211,7 @@ log(f"  Max length     : {MAX_LENGTH}")
 log(f"  Batch / GPU    : {BATCH_SIZE}  |  Grad accum: {GRAD_ACCUM}")
 log(f"  Effective batch: {BATCH_SIZE * GRAD_ACCUM * max(torch.cuda.device_count(), 1)}")
 log(f"  GCS bucket     : {GCS_BUCKET}")
-log(f"  ─ Save Locations (3 backups) ─")
+log(f"  ─ Save Locations (4 backups) ─")
 log(f"    1. AIP_MODEL_DIR  : '{AIP_MODEL_DIR}'")
 log(f"    2. GCS primary    : {GCS_MODEL_OUT}")
 log(f"    3. GCS backup     : {GCS_MODEL_BACKUP}")
@@ -406,10 +406,33 @@ log(f"  Train: {len(tokenized['train']):,}  |  Test: {len(tokenized['test']):,}"
 # MODEL
 # ═══════════════════════════════════════════════════════════════════════════
 log("\nLoading model ...")
+
+# ── GPU Diagnostic Info ────────────────────────────────────────────────────
+log("\n  ─ GPU DIAGNOSTICS ─")
+log(f"    torch.cuda.is_available()  : {torch.cuda.is_available()}")
+log(f"    torch.cuda.device_count()  : {torch.cuda.device_count()}")
+if torch.cuda.is_available():
+    for i in range(torch.cuda.device_count()):
+        log(f"    Device {i}: {torch.cuda.get_device_name(i)}")
+log(f"    RANK {RANK} will use GPU: {RANK % torch.cuda.device_count() if torch.cuda.device_count() > 0 else 'N/A'}")
+
 model = AutoModelForSequenceClassification.from_pretrained(
-    MODEL_CHECKPOINT, num_labels=2
+    MODEL_CHECKPOINT, num_labels=2, device_map="auto"
 )
-log(f"    Parameters: {sum(p.numel() for p in model.parameters()):,}")
+total_params = sum(p.numel() for p in model.parameters())
+log(f"    Parameters: {total_params:,}")
+
+# ── Verify model is on GPU ─────────────────────────────────────────────────
+if torch.cuda.is_available():
+    try:
+        first_param_device = next(model.parameters()).device
+        log(f"    Model device: {first_param_device}")
+        if first_param_device.type != "cuda":
+            log(f"    ⚠ WARNING: Model is on {first_param_device}, not CUDA!")
+    except StopIteration:
+        log(f"    ⚠ WARNING: Model has no parameters!")
+else:
+    log(f"    ✗ CRITICAL: CUDA not available! Training will be very slow on CPU.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -424,6 +447,18 @@ def compute_metrics(eval_pred):
     acc   = _acc_metric.compute(predictions=preds, references=labels)
     f1    = _f1_metric.compute(predictions=preds, references=labels, average="weighted")
     return {**acc, **f1}
+
+
+# ── Custom callback to log GPU memory usage ────────────────────────────────
+from transformers.trainer_callback import TrainerCallback
+
+class GPUMemoryCallback(TrainerCallback):
+    """Log GPU memory allocation per step (rank 0 only)."""
+    def on_step_end(self, args, state, control, **kwargs):
+        if is_main() and torch.cuda.is_available() and state.global_step % 50 == 0:
+            mem_allocated = torch.cuda.memory_allocated() / (1024**3)
+            mem_reserved = torch.cuda.memory_reserved() / (1024**3)
+            log(f"    [Step {state.global_step}] GPU Mem: {mem_allocated:.1f}GB allocated, {mem_reserved:.1f}GB reserved")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -441,7 +476,8 @@ training_args = TrainingArguments(
     weight_decay                = WEIGHT_DECAY,
     warmup_ratio                = WARMUP_RATIO,
     fp16                        = True,
-    gradient_checkpointing      = False,    # False avoids DDP hook conflicts
+    tf32                        = True,              # Enable TF32 for speedup on A100/modern GPUs
+    gradient_checkpointing      = False,             # False avoids DDP hook conflicts
     load_best_model_at_end      = True,
     metric_for_best_model       = "f1",
     lr_scheduler_type           = "cosine",
@@ -455,6 +491,7 @@ training_args = TrainingArguments(
     logging_first_step          = True,
     logging_strategy            = "steps",
     ddp_find_unused_parameters  = False,
+    optim                       = "adamw_torch_fused",  # Use fused optimizer if available
 )
 
 
@@ -470,7 +507,10 @@ trainer = Trainer(
     eval_dataset    = tokenized["test"],
     tokenizer       = tokenizer,
     compute_metrics = compute_metrics,
-    callbacks       = [EarlyStoppingCallback(early_stopping_patience=2)],
+    callbacks       = [
+        EarlyStoppingCallback(early_stopping_patience=2),
+        GPUMemoryCallback(),
+    ],
 )
 
 trainer.train()
