@@ -191,8 +191,8 @@ GCS_LIAR_VALID = f"{GCS_BUCKET}/data/liar_dataset/valid.tsv"
 
 # ── Training hyper-parameters ─────────────────────────────────────────────
 MAX_LENGTH   = 1024    # Longformer max is 4096; 1024 fits in T4 16GB with fp16
-BATCH_SIZE   = 16      # per GPU — increased from 8 (was underutilizing GPU)
-GRAD_ACCUM   = 1       # disable if batch 16 fits in memory (2 GPUs × 16 × 1 = 32 effective)
+BATCH_SIZE   = 8       # per GPU — original config
+GRAD_ACCUM   = 2       # effective batch = 8 × 2 × 2 GPUs = 32
 EPOCHS       = 3
 LR           = 2e-5
 WARMUP_RATIO = 0.06
@@ -499,7 +499,6 @@ training_args = TrainingArguments(
     logging_first_step          = True,
     logging_strategy            = "steps",
     ddp_find_unused_parameters  = False,
-    optim                       = "adamw_torch_fused",  # Use fused optimizer if available
 )
 
 
