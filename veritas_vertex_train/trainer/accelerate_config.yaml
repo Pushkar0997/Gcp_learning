@@ -7,7 +7,9 @@ main_training_function: main
 mixed_precision: fp16
 num_machines: 1
 num_processes: 2
+# Explicit endpoint prevents silent hang if default port 29400 is busy
 rdzv_backend: static
+rdzv_endpoint: '127.0.0.1:29500'
 same_network: true
 tpu_env: []
 tpu_use_cluster: false
