@@ -247,6 +247,8 @@ if is_main():
     df_true["label"] = 0
     df_fake["label"] = 1
     df_all = pd.concat([df_true, df_fake], ignore_index=True)
+    log(f"      ISOT raw: {len(df_all):,} rows (True: {len(df_true):,}, Fake: {len(df_fake):,})")
+    
     df_all["fulltext"] = (
         df_all["title"].fillna("") + " " + df_all["text"].fillna("")
     ).str.strip()
@@ -256,7 +258,7 @@ if is_main():
         .loc[lambda d: d["fulltext"].str.len() > 10]
         .reset_index(drop=True)
     )
-    log(f"      ISOT : {len(df_isot):,} rows")
+    log(f"      ISOT after filter: {len(df_isot):,} rows (dropped {len(df_all) - len(df_isot):,})")
 
     # ── 2 / 4  LIAR  ──────────────────────────────────────────────────────
     # train.tsv + valid.tsv  — tab-separated, no header row
@@ -288,7 +290,7 @@ if is_main():
 
     liar_rows = _parse_liar_tsv(GCS_LIAR_TRAIN) + _parse_liar_tsv(GCS_LIAR_VALID)
     df_liar   = pd.DataFrame(liar_rows)
-    log(f"      LIAR : {len(df_liar):,} rows")
+    log(f"      LIAR : {len(df_liar):,} rows (train + valid)")
 
     # ── 3 / 4  FEVER  ─────────────────────────────────────────────────────
     # train.jsonl — one JSON object per line
@@ -338,9 +340,15 @@ if is_main():
     split    = combined.train_test_split(test_size=0.1, seed=42)
     datasets = DatasetDict({"train": split["train"], "test": split["test"]})
 
+    log(f"\n      Dataset breakdown:")
+    log(f"        ISOT : {len(df_isot):,}")
+    log(f"        LIAR : {len(df_liar):,}")
+    log(f"        FEVER: {len(df_fever):,}")
+    log(f"      ───────────────")
     log(f"      Total : {len(combined):,}")
-    log(f"      Train : {len(datasets['train']):,}")
-    log(f"      Test  : {len(datasets['test']):,}")
+    log(f"      Train : {len(datasets['train']):,} ({100*len(datasets['train'])/len(combined):.1f}%)")
+    log(f"      Test  : {len(datasets['test']):,} ({100*len(datasets['test'])/len(combined):.1f}%)")
+    log(f"\n      Steps/epoch (batch={BATCH_SIZE*2}): {len(datasets['train']) // (BATCH_SIZE * 2):,} → Total: {(len(datasets['train']) // (BATCH_SIZE * 2)) * EPOCHS:,} steps")
 
     # Tokenize
     log("\n  Tokenizing (rank 0 only — prevents DDP Arrow lock collision) ...")
