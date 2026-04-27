@@ -1,8 +1,0 @@
-setup.py
-trainer/__init__.py
-trainer/task.py
-trainer_package.egg-info/PKG-INFO
-trainer_package.egg-info/SOURCES.txt
-trainer_package.egg-info/dependency_links.txt
-trainer_package.egg-info/requires.txt
-trainer_package.egg-info/top_level.txt
